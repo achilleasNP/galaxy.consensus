@@ -1,26 +1,46 @@
 import vcf as pyvcf
 import itertools as it
 from variant_ensemble import variant_ensemble
+from functools import total_ordering
+from heapq import merge
 
+
+
+@total_ordering
 class simple_variant:
   '''
   Minimum representation of a variant.
+  Dictionary order with letter based chromosomes
+  being bigger than number based ones. Number based
+  chromosomes compared as integers and alpha ones
+  compaired lexicographically.
   '''
 
   def __init__(self, rec, ALT):
     '''
-    Take a pyVCF _Record and make a string. Must provide explicit alternate allelel ALT.
+    Take a pyVCF _Record and make a string. Must provide explicit alternate allele ALT.
     '''
     self.ID = rec.CHROM + ':' + str(rec.POS) + ':' + str(rec.REF) + ':' + str(ALT)
     self.contig = rec.CHROM
     self.pos = rec.POS
+    self.alt = ALT 
+    self.ref = rec.REF 
   def __hash__(self):
     return hash(self.ID)
   def __eq__(self, other):
     if self.ID == other.ID: return True
     else: return False
   def __str__(self):
-    return self.ID    
+    return self.ID
+  def __gt__(self,other):
+      if self.contig.isalpha() and not other.contig.isalpha():
+          out = True
+      elif self.contig.isalpha() and other.contig.isalpha():
+          out = (self.contig,self.pos,self.ref,self.alt) > (other.contig, other.pos,self.ref,self.alt)
+      elif not self.contig.isalpha() and not other.contig.isalpha():
+          out = (int(self.contig),self.pos,self.ref,self.alt) > (int(other.contig), other.pos,self.ref,self.alt)
+      else:
+          out = False
 
 
 class vcf_ensemble:
@@ -53,14 +73,8 @@ class vcf_ensemble:
     '''
     variantSets = []
     readers = [ pyvcf.Reader(open(x), prepend_chr = False) for x in self.vcfs]
-    for x in readers:
-      variants = set()
-      for rec in x:
-        for alt in rec.ALT:
-          variants.add(simple_variant(rec, alt))
-
-      variantSets.append(variants)
-    return variantSets
+    variants = merge(*[get_variant_iterator(reader) for reader in readers ])
+    return variants
 
   @property
   def vcfReaders(self):
@@ -82,10 +96,16 @@ class vcf_ensemble:
     set consists of combinations of VCF sets set by the threshold (i.e.
    variants choose threshold).
     '''
-    sets = set()
-    for comb in it.combinations(self.variants, threshold):
-      sets.add( frozenset(reduce( lambda x, y: x.intersection(y), comb )) ) 
-    return reduce( lambda x, y: x.union(y), sets )
+    for group in it.groupby(self.variants):
+        n_vars = 0
+        for var in group:
+            n_vars += 1
+            if n_vars >= threshold:
+                yield var
+                break
+
+    
+             
 
   def concordant_variants(self, siteThresh, genoThresh):
     '''
@@ -94,11 +114,33 @@ class vcf_ensemble:
     variants = self._concordant_sites(siteThresh)
     samples = self.samples
     for variant in variants:
-      records = [ x.fetch(variant.contig, variant.pos) for x in self.vcfReaders ]
-      ## clean up missing records for a given threshold
-      records = [ x for x in records if x ]
-      ensemble = variant_ensemble(recordSet=[ x for x in records if x], samples=samples, threshold = genoThresh, ignoreMissing = self.ignoreMissing)
-      yield records, ensemble.set_concordance()
+      records = [ rec for x in self.vcfReaders for rec in  safe_records(x,variant) if rec] 
+      if records:
+          ensemble = variant_ensemble(recordSet=[ x for x in records if x], samples=samples, threshold = genoThresh, ignoreMissing = self.ignoreMissing)
+          yield records, ensemble.set_concordance()
+
+
+def safe_records(reader,variant):
+    '''
+    Returns only records matching the input variant and when there is a ValueError it
+    returns [None] this allows it to work in cases where one of the files is empty or
+    it doesn't contain some of the variants.
+    '''
+    try:
+        records = [rec for rec in reader.fetch(variant.contig,variant.pos-1,variant.pos) if (len(rec.ALT) == 1 and simple_variant(rec,rec.ALT[0])==variant) ]
+    except ValueError:
+        records = [None]
+    return records
+
+
+def get_variant_iterator(reader):
+    ''' Returns an iterator with sorted variants.
+        The variants are trully sorted if the vcf standard is
+        followed and there is only one ref for each pos.
+    '''
+    for rec in reader:
+        for alt in sorted(rec.ALT):
+            yield simple_variant(rec,alt) 
 
 
 
