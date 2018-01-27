@@ -97,7 +97,7 @@ class vcf_ensemble:
     set consists of combinations of VCF sets set by the threshold (i.e.
    variants choose threshold).
     '''
-    for group in it.groupby(self.variants):
+    for _,group in it.groupby(self.variants):
         n_vars = 0
         for var in group:
             n_vars += 1
