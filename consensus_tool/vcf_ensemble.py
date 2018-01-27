@@ -41,6 +41,7 @@ class simple_variant:
           out = (int(self.contig),self.pos,self.ref,self.alt) > (int(other.contig), other.pos,self.ref,self.alt)
       else:
           out = False
+      return out
 
 
 class vcf_ensemble:
